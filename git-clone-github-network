@@ -1,0 +1,69 @@
+#!/bin/sh
+# Clone a repository on GitHub and all its forks (and their forks, recursively) into one repository
+#
+# Requires curl
+#
+# Released into the public domain. There is no warranty for any damage
+# that may occur by using this script!
+#
+# Author: Stephan Beyer
+
+TMPNAM="git-clone-github-network.tmp"
+if [ -e "$TMPNAM" ]
+then
+	echo "Error: temporary directory \"$TMPNAM\" already exists. Exiting."
+	exit 1
+fi
+
+if [ -z "$1" ]
+then
+	echo "Usage: $0 user/repo"
+	exit 1
+fi
+
+get_json_string()
+{
+	sed -n -e 's/^.*"'"$1"'": "\([^"]*\)",\?$/\1/p' "$TMPNAM"/json
+}
+
+get_json_int()
+{
+	sed -n -e 's/^.*"'"$1"'": \([0-9]*\),\?$/\1/p' "$TMPNAM"/json
+}
+
+get_json_bool()
+{
+	sed -n -e 's/^.*"'"$1"'": \([a-z]*\),\?$/\1/p' "$TMPNAM"/json
+}
+
+get_next_link()
+{
+	sed -n -e 's/^Link:.* <\([^>]*\)>; rel="next".*/\1/p' "$TMPNAM"/json
+}
+
+api_call()
+{
+	curl -s -i "$1" > "$TMPNAM"/json
+}
+
+mkdir "$TMPNAM"
+
+api_call "https://api.github.com/repos/$1"
+
+test "$(get_json_bool fork)" = "true" && echo "Warning: the repository is itself a fork!"
+get_json_string clone_url > "$TMPNAM"/clones
+
+many="$(get_json_int forks_count)"
+echo "Getting information on $many direct forks of $1 ..."
+api_call "$(get_json_string forks_url)"
+
+get_json_string clone_url >> "$TMPNAM"/clones
+get_json_string forks_url > "$TMPNAM"/forks
+while [ -n "$(get_next_link)" ]
+do
+	api_call "$(get_next_link)"
+	get_json_string clone_url >> "$TMPNAM"/clones
+	get_json_string forks_url >> "$TMPNAM"/forks
+done
+
+rm -rf "$TMPNAM"
