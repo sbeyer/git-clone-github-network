@@ -1,0 +1,128 @@
+#!/usr/bin/env ruby
+# Display refs of the current Git repository in a way
+# that allows to (hopefully) get an idea of the structure
+# of unmerged branches.
+#
+# (We could do a lot more than now (we are just a small git log
+#  wrapper atm), but ... well, the time...)
+#
+# Released into the public domain. There is no warranty for any damage
+# that may occur by using this script!
+#
+# Author: Stephan Beyer
+
+puts "Building data structure... (this may take some time)"
+
+refs = {}
+`git show-ref`.split(/[\r\n]+/).each do |line|
+	hash, ref = line.split(/ /)
+	refs[hash] = [] if refs[hash].nil?
+	refs[hash] << ref
+end
+
+$alive = 0
+Alive = '-\|/'
+def output_alive
+	print "#{Alive[$alive]}\r"
+	$alive += 1
+	$alive %= Alive.length
+end
+
+class Revs
+	Adj = Struct.new(:children, :parents)
+
+	def initialize
+		@revs = {}
+	end
+
+	def make(hash)
+		@revs[hash] = Adj.new([], []) if @revs[hash].nil?
+	end
+
+	def add_child(hash, child)
+		@revs[hash].children << child
+	end
+
+	def add_parent(hash, parent)
+		@revs[hash].parents << parent
+	end
+
+	def exists?(hash)
+		not @revs[hash].nil?
+	end
+
+	def set_parents(hash, parents)
+		make(hash)
+		parents.each do |parent|
+			make(parent)
+			add_parent(hash, parent)
+			add_child(parent, hash)
+		end
+	end
+
+	def get_first_parent(hash)
+		@revs[hash].parents.first
+	end
+
+	def get_tips
+		tips = []
+		@revs.each do |hash, adj|
+			tips << hash if adj.children.empty?
+		end
+		tips
+	end
+
+	def contract_linear
+		contracted = false
+		@revs.each do |hash, adj|
+			if adj.children.length == 1 and adj.parents.length == 1
+				child = adj.children.first
+				parent = adj.parents.first
+				@revs[parent].children.map! do |e|
+					e == hash ? child : e
+				end.uniq!
+				@revs[child].parents.map! do |e|
+					e == hash ? parent : e
+				end.uniq!
+				@revs.delete(hash)
+				contracted = true
+			end
+		end
+		contracted
+	end
+
+	def contract_uninteresting
+		while (contract_linear)
+		end
+	end
+end
+
+# do a breadth-first search from every ref to build a revision graph
+revs = Revs.new
+refs.each do |hash,_|
+	output_alive
+	next if revs.exists?(hash)
+	queue = [hash]
+	while not queue.empty?
+		hash = queue.shift
+		parents = `git show --pretty=raw #{hash}`.lines.select do |line|
+			line[0,7] == 'parent '
+		end.map do |line|
+			line.chomp![7..-1]
+		end
+		parents.each do |parent|
+			if not revs.exists?(parent)
+				queue.push(parent)
+			end
+		end
+		revs.set_parents(hash, parents)
+	end
+end
+
+revs.contract_uninteresting
+revs.get_tips.each do |hash|
+	puts "== #{refs[hash].join(', ')} =="
+	puts `git log --max-count=10 --pretty=format:'%h [%an, %ai] %s' #{revs.get_first_parent(hash)}..#{hash}`
+	puts
+end
+
