@@ -52,14 +52,38 @@ def get_forks_of(repo)
 	forks
 end
 
-if ARGV.length != 1
-	STDERR.puts "Usage: #{$0} user/repo"
+if ARGV.length != 2
+	STDERR.puts "Usage: #{$0} <user>/<repo> <clone-dir>"
 	exit 1
 end
+reponame = ARGV[0]
+clonedir = ARGV[1]
 
-repo = api_call("#{GithubAPI}/#{ARGV[0]}")
+if File.exists?(clonedir)
+	STDERR.puts "Error: clone directory #{clonedir} already exists"
+end
+
+repo = api_call("#{GithubAPI}/#{reponame}")
 puts "Warning: the repository is itself a fork!" if repo['fork']
 
 forks = get_forks_of(repo)
 
-puts "Now invoking git to pull #{forks.length} repositories"
+puts "Now invoking git to pull #{forks.length} repositories into #{clonedir}"
+
+FileUtils.mkdir_p(clonedir)
+
+puts
+puts "====================================================================="
+`cd #{clonedir} && git init`
+fail unless $?.success?
+forks.each do |fullname, cloneurl|
+	`cd #{clonedir} && git remote add -f #{fullname} #{cloneurl}`
+	fail unless $?.success?
+end
+puts "====================================================================="
+puts
+puts "Finished fetching all repositories."
+puts "You should now pick a master branch and do"
+puts
+puts "   cd #{clonedir}"
+puts "   git checkout -b master <picked_master_branch>"
