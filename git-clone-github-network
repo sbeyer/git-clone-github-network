@@ -1,69 +1,65 @@
-#!/bin/sh
+#!/usr/bin/env ruby
 # Clone a repository on GitHub and all its forks (and their forks, recursively) into one repository
 #
-# Requires curl
+# Tested with git 2.1.4
 #
 # Released into the public domain. There is no warranty for any damage
 # that may occur by using this script!
 #
 # Author: Stephan Beyer
 
-TMPNAM="git-clone-github-network.tmp"
-if [ -e "$TMPNAM" ]
-then
-	echo "Error: temporary directory \"$TMPNAM\" already exists. Exiting."
+GithubAPI = 'https://api.github.com/repos'
+
+require 'json'
+require 'open-uri'
+require 'fileutils'
+
+def get_next_link(line)
+	if line
+		m = line.match(/^<([^>]*)>; rel="next",*/)
+		m[1] if m
+	end
+end
+
+def api_call(url)
+	response = []
+	while url
+		open(url) do |f|
+			fail if f.status[0] != '200'
+			fail if f.content_type != 'application/json'
+			json = JSON.parse(f.read)
+			if json.is_a?(Array)
+				response.concat(json)
+				url = get_next_link(f.meta['link'])
+			else
+				return json
+			end
+		end
+	end
+	response
+end
+
+def get_forks_of(repo)
+	forks = [[repo['full_name'], repo['clone_url']]]
+	if (repo['forks_count'] > 0)
+		puts "Getting information on #{repo['forks_count']} direct forks of #{repo['full_name']} ..."
+
+		response = api_call(repo['forks_url'])
+		response.each do |forkrepo|
+			forks.concat(get_forks_of(forkrepo))
+		end
+	end
+	forks
+end
+
+if ARGV.length != 1
+	STDERR.puts "Usage: #{$0} user/repo"
 	exit 1
-fi
+end
 
-if [ -z "$1" ]
-then
-	echo "Usage: $0 user/repo"
-	exit 1
-fi
+repo = api_call("#{GithubAPI}/#{ARGV[0]}")
+puts "Warning: the repository is itself a fork!" if repo['fork']
 
-get_json_string()
-{
-	sed -n -e 's/^.*"'"$1"'": "\([^"]*\)",\?$/\1/p' "$TMPNAM"/json
-}
+forks = get_forks_of(repo)
 
-get_json_int()
-{
-	sed -n -e 's/^.*"'"$1"'": \([0-9]*\),\?$/\1/p' "$TMPNAM"/json
-}
-
-get_json_bool()
-{
-	sed -n -e 's/^.*"'"$1"'": \([a-z]*\),\?$/\1/p' "$TMPNAM"/json
-}
-
-get_next_link()
-{
-	sed -n -e 's/^Link:.* <\([^>]*\)>; rel="next".*/\1/p' "$TMPNAM"/json
-}
-
-api_call()
-{
-	curl -s -i "$1" > "$TMPNAM"/json
-}
-
-mkdir "$TMPNAM"
-
-api_call "https://api.github.com/repos/$1"
-
-test "$(get_json_bool fork)" = "true" && echo "Warning: the repository is itself a fork!"
-get_json_string clone_url > "$TMPNAM"/clones
-
-many="$(get_json_int forks_count)"
-echo "Getting information on $many direct forks of $1 ..."
-api_call "$(get_json_string forks_url)"
-
-get_json_string clone_url >> "$TMPNAM"/clones
-get_json_string forks_url > "$TMPNAM"/forks
-while [ -n "$(get_next_link)" ]
-do
-	api_call "$(get_next_link)"
-	get_json_string clone_url >> "$TMPNAM"/clones
-	get_json_string forks_url >> "$TMPNAM"/forks
-done
-
-rm -rf "$TMPNAM"
+puts "Now invoking git to pull #{forks.length} repositories"
